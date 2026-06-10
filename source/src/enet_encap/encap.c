@@ -523,7 +523,56 @@ EipStatus HandleReceivedSendUnitDataCommand(const EncapsulationData *const recei
 
     if(kSessionStatusValid == CheckRegisteredSessions(receive_data)) /* see if the EIP session is registered*/
     {
-      return_value = NotifyConnectedCommonPacketFormat(receive_data, originator_address, outgoing_message);
+      /* DoXOM: Extract CIP data from SendUnitData and route directly to
+       * NotifyMessageRouter. The firmware sends CIP Read/Write Tag messages
+       * via connected CPF items. We strip the CPF wrapper and pass the
+       * raw CIP data for our interceptors to handle. */
+      CipMessageRouterResponse mr_response;
+      InitializeMessageRouterResponse(&mr_response);
+      const EipUint8 *cpf = ((EncapsulationData *)receive_data)->current_communication_buffer_position;
+      EipUint16 item_count = cpf[0] | (cpf[1] << 8); /* item count */
+      (void)item_count;
+      /* Skip connected address item: type(2) + len(2) + conn_id(4) = 8 bytes */
+      const EipUint8 *cip_data = cpf + 2 + 8; /* skip addr item */
+      EipUint16 data_type = cip_data[0] | (cip_data[1] << 8);
+      EipUint16 data_len  = cip_data[2] | (cip_data[3] << 8);
+      if(data_type == 0x00B1 && data_len >= 4) {
+        const EipUint8 *payload = cip_data + 4;
+        /* payload = seq_count(2B) + CIP_service(1B) + CIP_path... */
+        (void)NotifyMessageRouter((EipUint8 *)payload, (int)(data_len),
+                                   &mr_response, originator_address,
+                                   receive_data->session_handle);
+        /* Build SendUnitData response with CIP reply */
+        if(mr_response.message.used_message_length > 0 || mr_response.general_status != 0) {
+          SkipEncapsulationHeader(outgoing_message);
+          /* Write CPF response: 2 items */
+          AddIntToMessage(2, outgoing_message); /* item count */
+          AddIntToMessage(0x00A1, outgoing_message); /* addr type */
+          AddIntToMessage(4, outgoing_message); /* addr len */
+          AddDintToMessage(0x12345678, outgoing_message); /* conn ID (fake) */
+          AddIntToMessage(0x00B1, outgoing_message); /* data type */
+          AddIntToMessage(2 + (EipUint16)mr_response.message.used_message_length,
+                         outgoing_message);
+          /* Sequence count (2B) */
+          AddIntToMessage(payload[0] | (payload[1] << 8), outgoing_message);
+          /* CIP reply */
+          memcpy(outgoing_message->current_message_position,
+                 mr_response.message.message_buffer,
+                 mr_response.message.used_message_length);
+          outgoing_message->current_message_position += mr_response.message.used_message_length;
+          outgoing_message->used_message_length += mr_response.message.used_message_length;
+          /* Generate encapsulation header */
+          CipOctet *buf = outgoing_message->current_message_position;
+          outgoing_message->current_message_position = outgoing_message->message_buffer;
+          GenerateEncapsulationHeader(receive_data,
+                                      outgoing_message->used_message_length,
+                                      receive_data->session_handle,
+                                      kEncapsulationProtocolSuccess,
+                                      outgoing_message);
+          outgoing_message->current_message_position = buf;
+          return_value = kEipStatusOkSend;
+        }
+      }
     } else { /* received a package with non registered session handle */
       InitializeENIPMessage(outgoing_message);
       GenerateEncapsulationHeader(receive_data, 0, receive_data->session_handle, kEncapsulationProtocolInvalidSessionHandle, outgoing_message);
