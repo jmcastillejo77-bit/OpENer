@@ -528,7 +528,8 @@ EipStatus HandleReceivedSendUnitDataCommand(const EncapsulationData *const recei
        * via connected CPF items. We strip the CPF wrapper and pass the
        * raw CIP data for our interceptors to handle. */
       CipMessageRouterResponse mr_response;
-      InitializeMessageRouterResponse(&mr_response);
+      memset(&mr_response, 0, sizeof(mr_response));
+      InitializeENIPMessage(&mr_response.message);
       const EipUint8 *cpf = ((EncapsulationData *)receive_data)->current_communication_buffer_position;
       EipUint16 item_count = cpf[0] | (cpf[1] << 8); /* item count */
       (void)item_count;
@@ -536,15 +537,23 @@ EipStatus HandleReceivedSendUnitDataCommand(const EncapsulationData *const recei
       const EipUint8 *cip_data = cpf + 2 + 8; /* skip addr item */
       EipUint16 data_type = cip_data[0] | (cip_data[1] << 8);
       EipUint16 data_len  = cip_data[2] | (cip_data[3] << 8);
-      if(data_type == 0x00B1 && data_len >= 4) {
-        const EipUint8 *payload = cip_data + 4;
-        /* payload = seq_count(2B) + CIP_service(1B) + CIP_path... */
-        (void)NotifyMessageRouter((EipUint8 *)payload, (int)(data_len),
+      if(data_type == 0x00B1 && data_len >= 6) {
+        const EipUint8 *raw_payload = cip_data + 4;
+        /* raw_payload = seq_count(2B) + CIP(service + path + request_data)
+         * Strip seq_count before passing to message router */
+        EipUint16 seq_count = raw_payload[0] | (raw_payload[1] << 8);
+        const EipUint8 *cip_payload = raw_payload + 2;
+        int cip_len = (int)(data_len) - 2;
+        (void)NotifyMessageRouter((EipUint8 *)cip_payload, cip_len,
                                    &mr_response, originator_address,
                                    receive_data->session_handle);
         /* Build SendUnitData response with CIP reply */
         if(mr_response.message.used_message_length > 0 || mr_response.general_status != 0) {
           SkipEncapsulationHeader(outgoing_message);
+          /* Write interface handle (4B) + timeout (2B) before CPF,
+           * matching the EIP SendUnitData response format the firmware expects */
+          AddDintToMessage(0, outgoing_message); /* interface handle */
+          AddIntToMessage(0, outgoing_message);  /* timeout */
           /* Write CPF response: 2 items */
           AddIntToMessage(2, outgoing_message); /* item count */
           AddIntToMessage(0x00A1, outgoing_message); /* addr type */
@@ -553,8 +562,8 @@ EipStatus HandleReceivedSendUnitDataCommand(const EncapsulationData *const recei
           AddIntToMessage(0x00B1, outgoing_message); /* data type */
           AddIntToMessage(2 + (EipUint16)mr_response.message.used_message_length,
                          outgoing_message);
-          /* Sequence count (2B) */
-          AddIntToMessage(payload[0] | (payload[1] << 8), outgoing_message);
+          /* Sequence count (2B) - echo back from request */
+          AddIntToMessage(seq_count, outgoing_message);
           /* CIP reply */
           memcpy(outgoing_message->current_message_position,
                  mr_response.message.message_buffer,

@@ -129,12 +129,19 @@ EipStatus NotifyMessageRouter(EipUint8 *data,
     return kEipStatusOkSend;
   }
 
-  /* DoXOM FAST PATH: Read/Write Tag with symbolic path (0x91 + name) */
+  /* DoXOM FAST PATH: Read/Write Tag with symbolic path (0x91 + name).
+   * CIP format: service(1B) + path_size_words(1B) + path(...) + request_data(...)
+   * The symbolic segment is at offset 2 (after service and path size word).
+   * data[0] = service code (e.g. 0x4C)
+   * data[1] = path size in 16-bit words
+   * data[2] = first path segment type (0x91 for symbolic)
+   */
   if(service_code == CIP_SERVICE_READ_TAG || service_code == CIP_SERVICE_WRITE_TAG ||
      service_code == CIP_SERVICE_READ_MODIFY) {
-    if(data_length > 2 && data[1] == 0x91) {
-      EipStatus tag_result = CipTagHandleReadWrite(service_code, data + 1,
-        data_length - 1, message_router_response);
+    if(data_length > 2 && data[2] == 0x91) {
+      /* data + 2 skips service byte and path size byte, pointing to path start */
+      EipStatus tag_result = CipTagHandleReadWrite(service_code, data + 2,
+        data_length - 2, message_router_response);
       if(tag_result == kEipStatusOkSend) {
         message_router_response->reply_service = (0x80 | service_code);
         return kEipStatusOkSend;

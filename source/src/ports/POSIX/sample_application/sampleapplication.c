@@ -15,6 +15,7 @@
 #include "ciptcpipinterface.h"
 #include "cipqos.h"
 #include "nvdata.h"
+#include "ciptags.h"
 #if defined(OPENER_ETHLINK_CNTRS_ENABLE) && 0 != OPENER_ETHLINK_CNTRS_ENABLE
   #include "cipethernetlink.h"
   #include "ethlinkcbs.h"
@@ -33,6 +34,44 @@ EipUint8 g_assembly_data064[32]; /* Input */
 EipUint8 g_assembly_data096[32]; /* Output */
 EipUint8 g_assembly_data097[10]; /* Config */
 EipUint8 g_assembly_data09A[32]; /* Explicit */
+
+/* DoXOM: tag storage for Allen Bradley simulation */
+static CipBool   g_tag_StartButton       = true;
+static CipBool   g_tag_StopButton        = false;
+static CipBool   g_tag_MotorRun          = false;
+static CipBool   g_tag_MotorFault        = false;
+static CipBool   g_tag_Sensor1           = true;
+static CipBool   g_tag_Sensor2           = false;
+static CipBool   g_tag_Valve1            = false;
+static CipBool   g_tag_LampGreen         = false;
+static CipBool   g_tag_LampRed           = true;
+static CipBool   g_tag_ModeAuto          = true;
+static CipBool   g_tag_SystemReady       = true;
+static CipBool   g_tag_EmergencyStop     = false;
+static CipDint   g_tag_Counter1          = 42;
+static CipDint   g_tag_Counter2          = 100;
+static CipDint   g_tag_Timer_Preset      = 5000;
+static CipDint   g_tag_Timer_Accum       = 0;
+static CipDint   g_tag_ProductionCount   = 1234;
+static CipDint   g_tag_ErrorCode         = 0;
+static CipDint   g_tag_SetPoint_Temperature = 250;
+static CipInt    g_tag_SpeedRPM          = 1500;
+static CipInt    g_tag_Temperature       = 25;
+static CipInt    g_tag_Pressure          = 100;
+static CipReal   g_tag_FlowRate          = 1.5f;
+static CipReal   g_tag_Level             = 75.0f;
+static CipReal   g_tag_PID_Output        = 50.0f;
+static CipReal   g_tag_PID_Setpoint      = 100.0f;
+static CipReal   g_tag_Voltage           = 24.0f;
+static CipSint   g_tag_AlarmLevel        = 3;
+static CipSint   g_tag_Percentage        = 75;
+static CipSint   g_tag_Mode              = 1;
+static CipUint   g_tag_StatusWord        = 0x0001;
+static CipUint   g_tag_ControlWord       = 0x0000;
+static CipUdint  g_tag_Runtime           = 3600;
+static CipUdint  g_tag_TotalCycles       = 500000;
+static CipDint   g_tag_ArrayData[10]     = {0,1,2,3,4,5,6,7,8,9};
+static CipInt    g_tag_AnalogInputs[5]   = {0,512,1024,2048,4095};
 
 /* local functions */
 
@@ -72,6 +111,45 @@ EipStatus ApplicationInitialization(void) {
                                      DEMO_APP_HEARTBEAT_LISTEN_ONLY_ASSEMBLY_NUM,
                                      DEMO_APP_INPUT_ASSEMBLY_NUM,
                                      DEMO_APP_CONFIG_ASSEMBLY_NUM);
+
+  /* DoXOM: Register tags in tag database for CIP Read/Write Tag */
+  CipTagDatabaseInit();
+  CipTagRegister("StartButton",        CIP_SIM_TYPE_BOOL,  1, &g_tag_StartButton);
+  CipTagRegister("StopButton",         CIP_SIM_TYPE_BOOL,  1, &g_tag_StopButton);
+  CipTagRegister("MotorRun",           CIP_SIM_TYPE_BOOL,  1, &g_tag_MotorRun);
+  CipTagRegister("MotorFault",         CIP_SIM_TYPE_BOOL,  1, &g_tag_MotorFault);
+  CipTagRegister("Sensor1",            CIP_SIM_TYPE_BOOL,  1, &g_tag_Sensor1);
+  CipTagRegister("Sensor2",            CIP_SIM_TYPE_BOOL,  1, &g_tag_Sensor2);
+  CipTagRegister("Valve1",             CIP_SIM_TYPE_BOOL,  1, &g_tag_Valve1);
+  CipTagRegister("LampGreen",          CIP_SIM_TYPE_BOOL,  1, &g_tag_LampGreen);
+  CipTagRegister("LampRed",            CIP_SIM_TYPE_BOOL,  1, &g_tag_LampRed);
+  CipTagRegister("ModeAuto",           CIP_SIM_TYPE_BOOL,  1, &g_tag_ModeAuto);
+  CipTagRegister("SystemReady",        CIP_SIM_TYPE_BOOL,  1, &g_tag_SystemReady);
+  CipTagRegister("EmergencyStop",      CIP_SIM_TYPE_BOOL,  1, &g_tag_EmergencyStop);
+  CipTagRegister("Counter1",           CIP_SIM_TYPE_DINT,  1, &g_tag_Counter1);
+  CipTagRegister("Counter2",           CIP_SIM_TYPE_DINT,  1, &g_tag_Counter2);
+  CipTagRegister("Timer_Preset",       CIP_SIM_TYPE_DINT,  1, &g_tag_Timer_Preset);
+  CipTagRegister("Timer_Accum",        CIP_SIM_TYPE_DINT,  1, &g_tag_Timer_Accum);
+  CipTagRegister("ProductionCount",    CIP_SIM_TYPE_DINT,  1, &g_tag_ProductionCount);
+  CipTagRegister("ErrorCode",          CIP_SIM_TYPE_DINT,  1, &g_tag_ErrorCode);
+  CipTagRegister("SetPoint_Temperature", CIP_SIM_TYPE_DINT, 1, &g_tag_SetPoint_Temperature);
+  CipTagRegister("SpeedRPM",           CIP_SIM_TYPE_INT,   1, &g_tag_SpeedRPM);
+  CipTagRegister("Temperature",        CIP_SIM_TYPE_INT,   1, &g_tag_Temperature);
+  CipTagRegister("Pressure",           CIP_SIM_TYPE_INT,   1, &g_tag_Pressure);
+  CipTagRegister("FlowRate",           CIP_SIM_TYPE_REAL,  1, &g_tag_FlowRate);
+  CipTagRegister("Level",              CIP_SIM_TYPE_REAL,  1, &g_tag_Level);
+  CipTagRegister("PID_Output",         CIP_SIM_TYPE_REAL,  1, &g_tag_PID_Output);
+  CipTagRegister("PID_Setpoint",       CIP_SIM_TYPE_REAL,  1, &g_tag_PID_Setpoint);
+  CipTagRegister("Voltage",            CIP_SIM_TYPE_REAL,  1, &g_tag_Voltage);
+  CipTagRegister("AlarmLevel",         CIP_SIM_TYPE_SINT,  1, &g_tag_AlarmLevel);
+  CipTagRegister("Percentage",         CIP_SIM_TYPE_SINT,  1, &g_tag_Percentage);
+  CipTagRegister("Mode",               CIP_SIM_TYPE_SINT,  1, &g_tag_Mode);
+  CipTagRegister("StatusWord",         CIP_SIM_TYPE_UINT,  1, &g_tag_StatusWord);
+  CipTagRegister("ControlWord",        CIP_SIM_TYPE_UINT,  1, &g_tag_ControlWord);
+  CipTagRegister("Runtime",            CIP_SIM_TYPE_UDINT, 1, &g_tag_Runtime);
+  CipTagRegister("TotalCycles",        CIP_SIM_TYPE_UDINT, 1, &g_tag_TotalCycles);
+  CipTagRegister("ArrayData",          CIP_SIM_TYPE_DINT, 10, g_tag_ArrayData);
+  CipTagRegister("AnalogInputs",       CIP_SIM_TYPE_INT,   5, g_tag_AnalogInputs);
 
   /* For NV data support connect callback functions for each object class with
    *  NV data.
@@ -213,4 +291,3 @@ void RunIdleChanged(EipUint32 run_idle_value) {
   }
   (void) run_idle_value;
 }
-

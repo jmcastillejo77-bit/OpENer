@@ -194,7 +194,16 @@ EipStatus CipTagHandleReadWrite(EipUint8 service_code,
     CipTagEntry *tag = CipTagFind(tag_name);
     if(!tag) {
         OPENER_TRACE_ERR("DoXOM Tag: tag '%s' not found\n", tag_name);
-        response->general_status = 0x08; /* Service unsupported (tag not found) */
+        /* Build CIP error response body:
+         *   reply_service(1B) + reserved(1B) +
+         *   general_status(1B) + addl_status_size(1B) = 4 bytes */
+        response->message.message_buffer[0] = (0x80 | service_code);
+        response->message.message_buffer[1] = 0x00;
+        response->message.message_buffer[2] = 0x08;
+        response->message.message_buffer[3] = 0x00;
+        response->message.used_message_length = 4;
+        response->message.current_message_position = response->message.message_buffer + 4;
+        response->general_status = 0x08;
         response->size_of_additional_status = 0;
         return kEipStatusOkSend;
     }
@@ -213,6 +222,14 @@ EipStatus CipTagHandleReadWrite(EipUint8 service_code,
 
         /* Build response in the message buffer */
         size_t total_size = tag->data_size * element_count;
+
+        /* CIP header: reply_service + reserved + status + addl_size */
+        response->message.message_buffer[0] = (uint8_t)(0x80 | service_code);
+        response->message.message_buffer[1] = 0x00;
+        response->message.message_buffer[2] = 0x00;
+        response->message.message_buffer[3] = 0x00;
+        response->message.used_message_length = 4;
+        response->message.current_message_position = response->message.message_buffer + 4;
 
         /* Response data type */
         AddIntToMessage(tag->data_type, &response->message);
