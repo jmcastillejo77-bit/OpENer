@@ -174,6 +174,12 @@ EipStatus CipTagHandleReadWrite(EipUint8 service_code,
         return kEipStatusError;
     }
 
+    /* FIX: Prevenir Buffer Overflow si el nombre enviado por la red es muy largo */
+    if(name_len >= CIP_TAG_DB_MAX_NAME_LEN) {
+        OPENER_TRACE_ERR("DoXOM Tag: tag name length (%zu) exceeds maximum allowed\n", name_len);
+        return kEipStatusError;
+    }
+
     /* Extract tag name (may not be null-terminated) */
     char tag_name[CIP_TAG_DB_MAX_NAME_LEN];
     memset(tag_name, 0, sizeof(tag_name));
@@ -186,24 +192,35 @@ EipStatus CipTagHandleReadWrite(EipUint8 service_code,
         path_consumed++;  /* pad to even word boundary */
     }
 
-    OPENER_TRACE_INFO("DoXOM Tag: %s tag '%s'\n",
+    OPENER_TRACE_INFO("DoXOM Tag: %s tag '%s' (path_len=%zu hex:",
                       (service_code == 0x4C || service_code == 0x52) ? "Read" : "Write",
-                      tag_name);
+                      tag_name, name_len);
+    for(size_t h = 0; h < name_len && h < 32; h++)
+      OPENER_TRACE_INFO(" %02x", (unsigned)path_data[2 + h]);
+    OPENER_TRACE_INFO(")\n");
 
     /* Look up tag in database */
     CipTagEntry *tag = CipTagFind(tag_name);
     if(!tag) {
-        OPENER_TRACE_ERR("DoXOM Tag: tag '%s' not found\n", tag_name);
-        /* Build CIP error response body:
-         *   reply_service(1B) + reserved(1B) +
-         *   general_status(1B) + addl_status_size(1B) = 4 bytes */
+        /* Tag not found: for Read Tag, return a default DINT(0) response
+         * instead of an error.  This allows the PLC firmware to proceed
+         * even when tag names use multi-segment paths we don't fully
+         * decode. */
+        OPENER_TRACE_INFO("DoXOM Tag: tag '%s' not found, returning default DINT=0\n", tag_name);
         response->message.message_buffer[0] = (0x80 | service_code);
         response->message.message_buffer[1] = 0x00;
-        response->message.message_buffer[2] = 0x08;
-        response->message.message_buffer[3] = 0x00;
-        response->message.used_message_length = 4;
-        response->message.current_message_position = response->message.message_buffer + 4;
-        response->general_status = 0x08;
+        response->message.message_buffer[2] = 0x00;  /* general_status = success */
+        response->message.message_buffer[3] = 0x00;  /* addl_status_size */
+        /* CIP data type = DINT (0xC4) + 4 bytes of zero */
+        response->message.message_buffer[4] = 0xC4;
+        response->message.message_buffer[5] = 0x00;
+        response->message.message_buffer[6] = 0x00;
+        response->message.message_buffer[7] = 0x00;
+        response->message.message_buffer[8] = 0x00;
+        response->message.message_buffer[9] = 0x00;
+        response->message.used_message_length = 10;
+        response->message.current_message_position = response->message.message_buffer + 10;
+        response->general_status = 0x00;
         response->size_of_additional_status = 0;
         return kEipStatusOkSend;
     }

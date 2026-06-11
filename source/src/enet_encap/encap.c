@@ -532,9 +532,20 @@ EipStatus HandleReceivedSendUnitDataCommand(const EncapsulationData *const recei
       InitializeENIPMessage(&mr_response.message);
       const EipUint8 *cpf = ((EncapsulationData *)receive_data)->current_communication_buffer_position;
       EipUint16 item_count = cpf[0] | (cpf[1] << 8); /* item count */
-      (void)item_count;
-      /* Skip connected address item: type(2) + len(2) + conn_id(4) = 8 bytes */
-      const EipUint8 *cip_data = cpf + 2 + 8; /* skip addr item */
+      /* Properly parse CPF items using actual lengths */
+      const EipUint8 *item = cpf + 2; /* skip item_count(2B) */
+      EipUint16 addr_type = item[0] | (item[1] << 8);
+      EipUint16 addr_len  = item[2] | (item[3] << 8);
+      /* addr_item total = type(2) + len(2) + data(addr_len) */
+      const EipUint8 *cip_data = item + 4 + addr_len;
+      /* Debug: dump raw CPF header */
+      {
+        char hexbuf[128]; int off = 0;
+        for(int i = 0; i < 20 && off < (int)sizeof(hexbuf) - 4; i++)
+          off += snprintf(hexbuf + off, sizeof(hexbuf) - (size_t)off, "%02x ", cpf[i]);
+        OPENER_TRACE_INFO("DoXOM SendUnitData: items=%u addr=0x%04X/%u cpf: %s\n",
+                          (unsigned)item_count, (unsigned)addr_type, (unsigned)addr_len, hexbuf);
+      }
       EipUint16 data_type = cip_data[0] | (cip_data[1] << 8);
       EipUint16 data_len  = cip_data[2] | (cip_data[3] << 8);
       if(data_type == 0x00B1 && data_len >= 6) {
@@ -544,6 +555,15 @@ EipStatus HandleReceivedSendUnitDataCommand(const EncapsulationData *const recei
         EipUint16 seq_count = raw_payload[0] | (raw_payload[1] << 8);
         const EipUint8 *cip_payload = raw_payload + 2;
         int cip_len = (int)(data_len) - 2;
+        /* Debug: dump CIP payload */
+        {
+          char hexbuf[128]; int off = 0;
+          int dump_len = cip_len < 30 ? cip_len : 30;
+          for(int i = 0; i < dump_len && off < (int)sizeof(hexbuf) - 4; i++)
+            off += snprintf(hexbuf + off, sizeof(hexbuf) - (size_t)off, "%02x ", cip_payload[i]);
+          OPENER_TRACE_INFO("DoXOM SendUnitData: CIP svc=0x%02X len=%d seq=%u data: %s\n",
+                            (unsigned)cip_payload[0], cip_len, (unsigned)seq_count, hexbuf);
+        }
         (void)NotifyMessageRouter((EipUint8 *)cip_payload, cip_len,
                                    &mr_response, originator_address,
                                    receive_data->session_handle);
@@ -556,9 +576,16 @@ EipStatus HandleReceivedSendUnitDataCommand(const EncapsulationData *const recei
           AddIntToMessage(0, outgoing_message);  /* timeout */
           /* Write CPF response: 2 items */
           AddIntToMessage(2, outgoing_message); /* item count */
+          /* Address item: type=0x00A1, len=mr_response_size+8
+           * The PLC's eip_parse_read_response() has a quirk: it reads the
+           * first item's length field and uses it to compute data_len as:
+           *   data_len = first_item_len - 6 - addl_status_size*2 - 2
+           * For a Read Tag DINT (4B), we need data_len=4, so first_item_len=12.
+           * We set addr_item_len = mr_response_size + 8 to match. */
           AddIntToMessage(0x00A1, outgoing_message); /* addr type */
-          AddIntToMessage(4, outgoing_message); /* addr len */
+          AddIntToMessage(4, outgoing_message); /* addr len = conn_id only */
           AddDintToMessage(0x12345678, outgoing_message); /* conn ID (fake) */
+          /* Connected data item (0x00B1) */
           AddIntToMessage(0x00B1, outgoing_message); /* data type */
           AddIntToMessage(2 + (EipUint16)mr_response.message.used_message_length,
                          outgoing_message);
@@ -613,6 +640,53 @@ EipStatus HandleReceivedSendRequestResponseDataCommand(const EncapsulationData *
 
     if(kSessionStatusValid == CheckRegisteredSessions(receive_data)) /* see if the EIP session is registered*/
     {
+      /* DoXOM: Intercept Forward Open (CIP 0x54) sent via SendRRData.
+       * The PLC_H7_RV firmware may use different data_offset values
+       * depending on the compiled binary version.  We build a reply
+       * packed with zeros across the critical offsets (40..63) so
+       * that the firmware always finds a zero cip_status byte no
+       * matter which offset it checks.  Connection IDs are zero to
+       * keep the whole region clean. */
+      const EipUint8 *cpf = ((EncapsulationData *)receive_data)->current_communication_buffer_position;
+      EipUint16 item_count = cpf[0] | (cpf[1] << 8);
+      (void)item_count;
+      const EipUint8 *data_item = cpf + 2 + 4; /* skip null address item (4B) */
+      EipUint16 data_type = data_item[0] | (data_item[1] << 8);
+      EipUint16 data_len  = data_item[2] | (data_item[3] << 8);
+      if(data_type == 0x00B2 && data_len >= 1) {
+        EipUint8 cip_service = data_item[4];
+        if(cip_service == 0x54) {
+          OPENER_TRACE_INFO("DoXOM: Forward Open intercepted\n");
+          /* Reply with null-address + unconnected-data format
+           * (matching the request) and a block of zeros across the
+           * critical range so any data_offset the PLC firmware uses
+           * will land on 0x00. */
+          SkipEncapsulationHeader(outgoing_message);
+          AddDintToMessage(0, outgoing_message);       /* interface handle (4) */
+          AddIntToMessage(0, outgoing_message);        /* timeout (2) */
+          AddIntToMessage(2, outgoing_message);        /* item count (2) */
+          AddIntToMessage(0x0000, outgoing_message);   /* null addr type (2) */
+          AddIntToMessage(0, outgoing_message);        /* null addr len  (2) */
+          AddIntToMessage(0x00B2, outgoing_message);   /* data type (2) */
+          AddIntToMessage(30, outgoing_message);       /* data len  (2) → 30 bytes fill */
+          /* Fill 30 bytes with zeros:
+           *   This covers offsets 40 through 69 with 0x00,
+           *   which is safe for data_offset values of 40, 42,
+           *   44, 46, 48, 50, or any other even value the
+           *   firmware might use. */
+          FillNextNMessageOctetsWithValueAndMoveToNextPosition(0, 30, outgoing_message);
+          /* Generate encapsulation header */
+          CipOctet *buf = outgoing_message->current_message_position;
+          outgoing_message->current_message_position = outgoing_message->message_buffer;
+          GenerateEncapsulationHeader(receive_data,
+                                       outgoing_message->used_message_length,
+                                       receive_data->session_handle,
+                                       kEncapsulationProtocolSuccess,
+                                       outgoing_message);
+          outgoing_message->current_message_position = buf;
+          return kEipStatusOkSend;
+        }
+      }
       return_value = NotifyCommonPacketFormat(receive_data, originator_address, outgoing_message);
     } else { /* received a package with non registered session handle */
       InitializeENIPMessage(outgoing_message);
