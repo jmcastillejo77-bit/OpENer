@@ -283,6 +283,15 @@ EipStatus CipTagHandleReadWrite(EipUint8 service_code,
         /* Copy data to tag storage */
         memcpy(tag->data, write_data, write_size);
 
+        /* Build proper CIP response for Write Tag:
+         *   reply_service(1B) + reserved(1B) + general_status(1B) + addl_size(1B) = 4 bytes */
+        response->message.message_buffer[0] = (uint8_t)(0x80 | service_code);
+        response->message.message_buffer[1] = 0x00;
+        response->message.message_buffer[2] = 0x00;
+        response->message.message_buffer[3] = 0x00;
+        response->message.used_message_length = 4;
+        response->message.current_message_position = response->message.message_buffer + 4;
+
         response->general_status = 0x00; /* Success */
         response->size_of_additional_status = 0;
 
